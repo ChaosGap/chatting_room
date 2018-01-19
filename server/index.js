@@ -8,13 +8,16 @@ const server = require('http').Server(app.callback())
 
 const io = require('socket.io')(server)
 
-const io_home = io.of('/io_home')
-
-const io_game = io.of('/io_game')
-
 const allRooms = [
     {room_id: 'io_home', room_name: '公众聊天室'},
-    {room_id: 'io_game', room_name: '王者开黑聊天组'}
+    {room_id: 'io_game', room_name: '王者开黑聊天组'},
+    {room_id: 'io_travel', room_name: '去哪儿旅行'}
+]
+
+const roomUsers = [
+    {room_id: 'io_home', users: []},
+    {room_id: 'io_game', users: []},
+    {room_id: 'io_travel', users: []}
 ]
 
 const router = require('koa-router')()
@@ -72,14 +75,67 @@ const isExistsUser = username => {
     })
 }
 
-// 返回所有房间列表
-router.get('/rooms', ctx => {
-    console.log('received a request ===>>> get allrooms ===>>> ', allRooms);
-    ctx.body = {
-        code: 0,
-        data: allRooms,
-        errMessage: 'get rooms ok'
+// 根据room_id 返回房间信息
+const getRoomInfo = room_id => {
+    let roomInfo = {};
+    roomUsers.forEach(ele => {
+        if(ele.room_id == room_id) {
+            roomInfo = ele;
+            return;
+        }
+    })
+    return roomInfo;
+}
+
+// 房间的用户变动 消息发送 
+const userChangeMessage = (room_id, users) => {
+    io.to(room_id)
+        .emit('userChangeMessage', users)
+}
+
+// 房间的新消息监听  消息发送
+const roomNewMessage = (room_id, OBJ) => {
+    OBJ.sendDate = new Date().getTime();
+    io.to(room_id)
+        .emit('roomNewMessage', OBJ)
+}
+
+// 删除某个房间的用户
+const deleteRoomUser = (room_id, user) => {
+    try {
+        getRoomInfo(room_id).users.forEach((ele, index, users) => {
+            if(ele.name == user.name){
+                users.splice(index, 1)
+                return;
+            }
+        })
+        userChangeMessage(room_id, getRoomInfo(room_id).users)
+    }catch(err) {
+        console.log(err)
+    }   
+}
+
+// 给某个房间增加用户
+const addRoomUser = (room_id, user) => {
+    try {
+        getRoomInfo(room_id).users.push(user);
+        userChangeMessage(room_id, getRoomInfo(room_id).users)
+    }catch(err) {
+        console.log(err)
     }
+}
+
+// 返回所有房间列表
+router.get('/rooms/allrooms', ctx => {
+    console.log('received a request ===>>> get allrooms ===>>> allRooms = ' + allRooms.length);
+    ctx.body = allRooms;
+})
+
+// 返回某个房间的用户信息
+router.get('/rooms/users', ctx => {
+    console.log('received a request ===>>> get roomUsers ===>>> roomUsers = ' + roomUsers.length);
+    let room_id = ctx.query.room_id;
+    ctx.body = getRoomInfo(room_id);
 })
 
 // 用户登录
@@ -137,48 +193,36 @@ router.post('/register', async ctx => {
 
 app.use(router.routes());
 
-let allUsers = [];
+//  io
+io.on('connection', Socket => {
 
-function sliceUsers(username) {
-    allUsers.forEach((ele, index) => {
-        if(ele.name == username) {
-            console.log('find the user')
-            allUsers.splice(index, 1);
+    /**
+     * 房间用户变动 消息监听
+     * OBJ { last_room_id, room_id, user }  
+     */
+    Socket.on('change_room', OBJ => {
+        let { last_room_id, room_id, user } = OBJ;
+        try {
+            console.log(last_room_id)
+            Socket.leave(last_room_id)
+            Socket.join(room_id)
+        }catch(err) {
+            console.log(err)
         }
-        return;
+        console.log('change_room_message ==>> ', OBJ)
+        deleteRoomUser(last_room_id, user);
+        addRoomUser(room_id, user);
+        console.log('change_room_message ===>>> over')
     })
-}
+    /**
+     * 房间新消息 消息监听
+     * OBJ { room_id, user, message }  
+     */
+    Socket.on('client_room_message', OBJ => {
+        let { room_id, user, message } = OBJ;
+        console.log('client_room_message ==>> ', OBJ)
+        roomNewMessage(room_id, OBJ)
+        console.log('client_room_message ===>>> over')
+    })
 
-io_home.on('connection', Socket => {
-    // 添加新用户
-    Socket.on('add_user', obj => {
-        console.log('a new guest is comming =====>>>>>',  obj)
-        sliceUsers(obj.name)
-        allUsers.push(obj);
-        io_home.emit('room_user_change', allUsers)
-        console.log(allUsers)
-    })
-    // 离开房间
-    Socket.on('remove_user', obj => {
-        console.log('a guest is gone =====>>>>>',  obj)
-        sliceUsers(obj.name)
-        console.log(allUsers)
-        io_home.emit('room_user_change', allUsers)
-    })
-    // 房间消息
-    Socket.on('toRoom', data => {
-        console.log('received a room message from ' + data.name + ' say: ==>> ' + data.message)
-        let name = data.name;
-        let message = data.message;
-        let postDate = new Date().getTime();
-        io_home.emit('room_message', {
-            name,
-            message,
-            postDate
-        })
-    })    
-
-    Socket.on('change_room', data => {
-        
-    })
 })

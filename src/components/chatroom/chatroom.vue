@@ -3,7 +3,7 @@
       <div class="main">
           <div class="left">
               <div class="users">
-                  <select @change="room_change" v-model='room_id' data-placeholder="Choose a room" >
+                  <select @change="changeRoom" v-model='room_id' data-placeholder="Choose a room" >
                     <option v-for='(room, index) in allrooms' :key='index' :value="room.room_id">{{room.room_name}}</option>
                   </select>
               </div>
@@ -14,10 +14,10 @@
           <div class="content">
               <div class="talkings" v-for='(talking, index) in talkings' :key="index">
                   <div class="postDate">
-                      {{talking.postDate}}
+                      {{talking.sendDate | date_to_string}}
                   </div>
                   <div class="message">
-                      {{talking.name}} :  {{talking.message}}
+                      {{talking.user.name}} :  {{talking.message}}
                   </div>
               </div>
           </div>
@@ -33,58 +33,111 @@ export default {
   data() {
       return {
           me: {},
+          roomInfo: {},
           users: [],
           words: '',
-          t: '',
+          s: '',
           talkings: [],
           allrooms: [],
+          last_room_id: '',
           room_id: ''
       }
   },
-  mounted() {
-      Me.chat.get('/rooms')
-        .then(ret => {
-            console.log(ret)
-                this.allrooms = ret.data
-                this.room_id = this.allrooms[0].room_id
-        })
-        .catch(err => {
-            alert(err)
-        })
-      this.me = this.getMyMessage();
-      this.t = io('http://localhost:8090/io_home');
-      var t = this.t;
-      t.emit('add_user', this.me)
-      t.on('room_message', obj => {
-          obj.name = obj.name || '神秘人';
-          obj.postDate = new Date(obj.postDate).toLocaleString();
-          this.talkings.push(obj)
-      })
-      t.on('room_user_change', obj => {
-          this.users = obj;
-      })
-
-      window.onunload = _ => {
-          t.emit('remove_user', this.me)
+  filters: {
+      date_to_string: function(time) {
+          return new Date(time).toLocaleString();
       }
   },
+  async mounted() {
+      // 得到自身的信息
+      this.me = this.getMyMessage();
+      // 获取所有聊天室
+      this.allrooms = await this.getAllRooms();
+      // 设置当前聊天室
+      this.room_id = this.allrooms[0].room_id;
+      // 设置上一个聊天室 初始化时为当前聊天室
+      this.last_room_id = this.room_id;
+      // 创建socket链接
+      this.connectSocketIO();
+      // 获取当前聊天室的所有人的信息
+      this.roomInfo = await this.getRoomUsers();
+      this.users = this.roomInfo.users;
+      // 监听 userChangeMessage 事件  ===>>>  房间用户变动消息
+      this.listen_userChangeMessage();
+      // 监听 当前 聊天室 所有的消息
+      this.listen_roomNewMessage();
+      // 离开页面之前 销毁房间的用户
+      this.beforeLeaveSystem();
+  },
   methods: {
-      say: function(e) {
-          if(this.words.trim() == '') {
-              this.words = '';
-              return;
-          }
-          // 清空 textarea， 输出到 content，并且给服务器发送消息
-          this.t.emit('toRoom', {
-              name: this.me.name,
-              message: this.words
-          })
-          this.words = '';
-      },
       getMyMessage: function() {
           return JSON.parse(localStorage.me)
       },
-      room_change: function(e){
+      connectSocketIO: function(){
+          this.s = io('http://localhost:8090');
+          this.changeRoom();
+      },
+      getAllRooms: async function(){
+          try {
+              return await Me.chat.get('/rooms/allrooms');
+          }catch(err) {
+              console.log('getAllRooms err => ', err);
+          }
+      },
+      getRoomUsers: async function(){
+          try {
+              return await Me.chat.get('/rooms/users', {room_id: this.room_id})
+          }catch(err) {
+              console.log('getRoomUsers err => ' + err);
+          }
+      },
+      say: function(e) {
+         if(this.words.trim() == '') {
+             this.words = '';
+             return;
+         }
+         // 发送消息
+         this.s.emit('client_room_message', {
+             room_id: this.room_id,
+             user: this.me,
+             message: this.words
+         })
+         this.words = '';
+      },
+      changeRoom: function(){
+          this.s.emit('change_room', {
+              last_room_id: this.last_room_id,
+              room_id: this.room_id,
+              user: this.me
+          })
+          this.last_room_id = this.room_id;
+      },
+      listen_userChangeMessage: function(){
+          this.s.on('userChangeMessage', users => {
+              console.log(users)
+              this.users = users;
+          }) 
+      },
+      listen_roomNewMessage: function(){
+          this.s.on('roomNewMessage', OBJ => {
+              console.log(OBJ)
+              this.talkings.push(OBJ);
+              this.$nextTick(_ => {
+                  this.scrollToBottom();
+              })
+          })
+      },
+      scrollToBottom: function(){
+          $('.content').scrollTop($('.content').height() * 2)
+      },
+      beforeLeaveSystem: function(){
+          window.onunload = function() {
+              this.s.emit('change_room', {
+                  last_room_id: this.last_room_id,
+                  room_id: null,
+                  user: this.me
+              })
+          }
       }
   }
 }
