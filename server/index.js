@@ -195,7 +195,6 @@ app.use(router.routes());
 
 //  io
 io.on('connection', Socket => {
-
     /**
      * 房间用户变动 消息监听
      * OBJ { last_room_id, room_id, user }  
@@ -219,10 +218,14 @@ io.on('connection', Socket => {
      * OBJ { room_id, user, message }  
      */
     Socket.on('client_room_message', OBJ => {
+        let clients = io.sockets;
+        console.log(Socket.id)
+        // clients.forEach(ele => {
+        //     console.log(ele)
+        // })
         let { room_id, user, message } = OBJ;
         console.log('client_room_message ==>> ', OBJ)
         roomNewMessage(room_id, OBJ)
         console.log('client_room_message ===>>> over')
     })
-
 })
